@@ -9,6 +9,7 @@ import {
   fetchPlan,
   fetchStations
 } from "./api";
+import "./styles/app.css";
 
 type Bounds = {
   minLat: number;
@@ -17,6 +18,7 @@ type Bounds = {
   maxLon: number;
 };
 
+// ... (helper functions kept same or similar)
 function computeBounds(stations: Station[], lines: Line[]): Bounds | null {
   const points: number[][] = [];
   lines.forEach((line) => line.polyline.forEach((p) => points.push(p)));
@@ -40,12 +42,28 @@ function latLonToXY(
   bounds: Bounds,
   width: number,
   height: number,
-  padding = 30
+  padding = 40
 ) {
   const latSpan = bounds.maxLat - bounds.minLat || 1;
   const lonSpan = bounds.maxLon - bounds.minLon || 1;
-  const x = padding + ((lon - bounds.minLon) / lonSpan) * (width - 2 * padding);
-  const y = padding + (1 - (lat - bounds.minLat) / latSpan) * (height - 2 * padding);
+  // Center content
+  const mapRatio = width / height;
+  const contentRatio = lonSpan / latSpan;
+
+  let renderWidth = width;
+  let renderHeight = height;
+
+  if (contentRatio > mapRatio) {
+    renderHeight = renderWidth / contentRatio;
+  } else {
+    renderWidth = renderHeight * contentRatio;
+  }
+
+  const xOffset = (width - renderWidth) / 2;
+  const yOffset = (height - renderHeight) / 2;
+
+  const x = xOffset + padding + ((lon - bounds.minLon) / lonSpan) * (renderWidth - 2 * padding);
+  const y = yOffset + padding + (1 - (lat - bounds.minLat) / latSpan) * (renderHeight - 2 * padding);
   return { x, y };
 }
 
@@ -82,24 +100,25 @@ function downloadFile(filename: string, content: string, type: string) {
 }
 
 export default function App() {
+  const [theme, setTheme] = useState<"dark" | "light">("dark");
   const [stations, setStations] = useState<Station[]>([]);
   const [lines, setLines] = useState<Line[]>([]);
   const [baseStation, setBaseStation] = useState<string>("");
   const [dailyBudget, setDailyBudget] = useState<number>(420);
-  const [singleLineMinutes, setSingleLineMinutes] = useState<number>(4);
-  const [twoLineMinutes, setTwoLineMinutes] = useState<number>(7);
-  const [threePlusMinutes, setThreePlusMinutes] = useState<number>(10);
-  const [twoLineXfer, setTwoLineXfer] = useState<number>(4);
-  const [threePlusXfer, setThreePlusXfer] = useState<number>(6);
-  const [inspectionOverrides, setInspectionOverrides] = useState<string>("{}");
-  const [transferOverrides, setTransferOverrides] = useState<string>("{}");
   const [plan, setPlan] = useState<PlanResponse | null>(null);
   const [selectedDay, setSelectedDay] = useState<number>(0);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string>("");
   const [speed, setSpeed] = useState<number>(60);
+  const [hoveredStation, setHoveredStation] = useState<Station | null>(null);
+
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const animationRef = useRef<{ start: number; running: boolean }>({ start: 0, running: false });
+
+  // Load Initial Data
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+  }, [theme]);
 
   useEffect(() => {
     fetchStations()
@@ -116,6 +135,32 @@ export default function App() {
   const routePoints = useMemo(() => flattenRoutePoints(day), [day]);
   const timedSegments = useMemo(() => buildTimedSegments(day), [day]);
 
+  // Canvas Mouse Handling for Hover
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (!canvasRef.current || !bounds) return;
+    const rect = canvasRef.current.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+
+    // Check distance to stations (simple reverse projection is hard, so loop screen coords)
+    // Optimization: This runs every frame on mouse move, iterate all stations is okay for <300 items
+    let found: Station | null = null;
+    const width = canvasRef.current.width;
+    const height = canvasRef.current.height;
+
+    // Note: we need to use the exact same transform logic
+    // We'll recalc it or memoize it. For now, recalc.
+    for (const s of stations) {
+      const { x, y } = latLonToXY(s.lat, s.lon, bounds, width, height);
+      const dist = Math.sqrt((x - mx) ** 2 + (y - my) ** 2);
+      if (dist < 10) { // 10px radius
+        found = s;
+        break;
+      }
+    }
+    setHoveredStation(found);
+  };
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || !bounds) return;
@@ -123,17 +168,28 @@ export default function App() {
     if (!ctx) return;
 
     const draw = (timeMs?: number) => {
-      const width = canvas.clientWidth;
+      const width = canvas.clientWidth;  // Use CSS size
       const height = canvas.clientHeight;
-      if (canvas.width !== width || canvas.height !== height) {
-        canvas.width = width;
-        canvas.height = height;
-      }
+      // High DPI scaling could be added here
+      canvas.width = width;
+      canvas.height = height;
+
+      const isDark = theme === "dark";
+      const bgColor = isDark ? "#0d1411" : "#e6e8eb";
+      const stationColor = isDark ? "#b4c8c3" : "#57606a";
+      const stationActiveColor = isDark ? "#ffe48a" : "#d29922";
+      const routeColor = isDark ? "#f2c879" : "#d29922";
+      const textColor = isDark ? "#fff" : "#000";
+
       ctx.clearRect(0, 0, width, height);
 
-      ctx.fillStyle = "#0d1411";
+      // Background
+      ctx.fillStyle = bgColor;
       ctx.fillRect(0, 0, width, height);
 
+      // Draw Lines
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
       lines.forEach((line) => {
         if (!line.polyline || line.polyline.length < 2) return;
         ctx.beginPath();
@@ -142,21 +198,16 @@ export default function App() {
           if (idx === 0) ctx.moveTo(x, y);
           else ctx.lineTo(x, y);
         });
-        ctx.strokeStyle = `#${line.color || "9bd2c9"}`;
-        ctx.lineWidth = 3;
-        ctx.globalAlpha = 0.7;
+
+        let color = line.color ? `#${line.color.replace("#", "")}` : "#9bd2c9";
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 4;
+        ctx.globalAlpha = 0.8;
         ctx.stroke();
         ctx.globalAlpha = 1;
       });
 
-      ctx.fillStyle = "#b4c8c3";
-      stations.forEach((s) => {
-        const { x, y } = latLonToXY(s.lat, s.lon, bounds, width, height);
-        ctx.beginPath();
-        ctx.arc(x, y, 3, 0, Math.PI * 2);
-        ctx.fill();
-      });
-
+      // Draw Route Highlight
       if (routePoints.length > 1) {
         ctx.beginPath();
         routePoints.forEach((pt, idx) => {
@@ -164,21 +215,40 @@ export default function App() {
           if (idx === 0) ctx.moveTo(x, y);
           else ctx.lineTo(x, y);
         });
-        ctx.strokeStyle = "#f2c879";
-        ctx.lineWidth = 4;
+        ctx.strokeStyle = routeColor;
+        ctx.lineWidth = 6;
+        ctx.globalAlpha = 0.6;
         ctx.stroke();
+        ctx.globalAlpha = 1;
       }
 
+      // Draw Stations
       const inspected = new Set(day?.stations ?? []);
       stations.forEach((s) => {
-        if (!inspected.has(s.id)) return;
         const { x, y } = latLonToXY(s.lat, s.lon, bounds, width, height);
         ctx.beginPath();
-        ctx.arc(x, y, 6, 0, Math.PI * 2);
-        ctx.fillStyle = "#ffe48a";
+
+        const isActive = inspected.has(s.id);
+        const radius = isActive ? 5 : 3;
+
+        ctx.arc(x, y, radius, 0, Math.PI * 2);
+        ctx.fillStyle = isActive ? stationActiveColor : stationColor;
         ctx.fill();
+
+        // Label if active or hovered
+        if (hoveredStation?.id === s.id) {
+          ctx.fillStyle = textColor;
+          ctx.font = "bold 14px 'Outfit', sans-serif";
+          ctx.fillText(s.name, x + 10, y + 4);
+        } else if (isActive && width > 800) { // Show active labels on large screens
+          // Use smaller font for active but not hovered
+          // ctx.fillStyle = isDark ? "rgba(255,255,255,0.7)" : "rgba(0,0,0,0.6)";
+          // ctx.font = "10px sans-serif";
+          // ctx.fillText(s.name, x + 8, y + 3);
+        }
       });
 
+      // Animation train
       if (timeMs !== undefined && timedSegments.length > 0) {
         const elapsed = Math.max(0, timeMs - animationRef.current.start);
         const scaled = elapsed * speed;
@@ -208,10 +278,17 @@ export default function App() {
           const { x, y } = latLonToXY(currentPoint[0], currentPoint[1], bounds, width, height);
           ctx.beginPath();
           ctx.arc(x, y, 8, 0, Math.PI * 2);
-          ctx.fillStyle = "#ffffff";
+          ctx.fillStyle = "#fff";
           ctx.fill();
-          ctx.strokeStyle = "#0d1411";
           ctx.lineWidth = 2;
+          ctx.strokeStyle = "#000";
+          ctx.stroke();
+
+          // Ripple effect
+          const ripple = (timeMs / 500) % 1;
+          ctx.beginPath();
+          ctx.arc(x, y, 8 + ripple * 20, 0, Math.PI * 2);
+          ctx.strokeStyle = `rgba(255, 255, 255, ${1 - ripple})`;
           ctx.stroke();
         }
       }
@@ -226,32 +303,34 @@ export default function App() {
 
     draw();
     if (plan && timedSegments.length > 0) {
-      animationRef.current.start = performance.now();
-      animationRef.current.running = true;
-      requestAnimationFrame(animate);
+      if (!animationRef.current.running) {
+        animationRef.current.start = performance.now();
+        animationRef.current.running = true;
+        requestAnimationFrame(animate);
+      }
+    } else {
+      animationRef.current.running = false;
     }
 
     return () => {
       animationRef.current.running = false;
     };
-  }, [bounds, lines, stations, routePoints, timedSegments, speed, plan, day]);
+  }, [bounds, lines, stations, routePoints, timedSegments, speed, theme, hoveredStation]);
 
   const handlePlan = async () => {
     setError("");
     setLoading(true);
     try {
-      const inspectionOverridesObj = JSON.parse(inspectionOverrides || "{}");
-      const transferOverridesObj = JSON.parse(transferOverrides || "{}");
       const payload: PlanRequest = {
         start_station_id: baseStation,
         daily_budget_minutes: dailyBudget,
         inspection: {
-          single_line_minutes: singleLineMinutes,
-          two_line_minutes: twoLineMinutes,
-          three_plus_minutes: threePlusMinutes,
-          overrides: inspectionOverridesObj
+          single_line_minutes: 4,
+          two_line_minutes: 7,
+          three_plus_minutes: 10,
+          overrides: {}
         },
-        transfer: { two_line_minutes: twoLineXfer, three_plus_minutes: threePlusXfer, overrides: transferOverridesObj },
+        transfer: { two_line_minutes: 4, three_plus_minutes: 6, overrides: {} },
         base_inspection: false
       };
       const data = await fetchPlan(payload);
@@ -264,174 +343,105 @@ export default function App() {
     }
   };
 
-  const handleExportJson = () => {
-    if (!plan) return;
-    downloadFile("plan.json", JSON.stringify(plan, null, 2), "application/json");
-  };
-
-  const handleExportCsv = () => {
-    if (!plan) return;
-    let csv = "day,order,station_id\n";
-    plan.days.forEach((d) => {
-      d.stations.forEach((s, idx) => {
-        csv += `${d.day_index},${idx + 1},${s}\n`;
-      });
-    });
-    downloadFile("plan.csv", csv, "text/csv");
-  };
-
   return (
     <div className="app">
       <header className="header">
         <div>
           <h1>Delhi Metro Auditor</h1>
-          <p>Plan multi-day inspections with transfer penalties and GTFS-derived travel times.</p>
+          <div style={{ opacity: 0.7, fontSize: 14 }}>Automated Inspection Planner</div>
         </div>
-        <div className="stats">
-          <div>
-            <span>Days</span>
-            <strong>{plan?.stats.total_days ?? "--"}</strong>
+
+        <div className="header-controls">
+          <div className="stats">
+            <div className="stat-pill">
+              <span>Days</span>
+              <strong>{plan?.stats.total_days ?? "--"}</strong>
+            </div>
+            <div className="stat-pill">
+              <span>Total Time</span>
+              <strong>{plan?.stats.total_minutes.toFixed(0) ?? "--"}m</strong>
+            </div>
           </div>
-          <div>
-            <span>Total min</span>
-            <strong>{plan?.stats.total_minutes.toFixed(1) ?? "--"}</strong>
-          </div>
-          <div>
-            <span>Transfers</span>
-            <strong>{plan?.stats.total_transfer_count ?? "--"}</strong>
-          </div>
+
+          <button
+            className="theme-toggle"
+            onClick={() => setTheme(t => t === 'dark' ? 'light' : 'dark')}
+            title="Toggle Theme"
+          >
+            {theme === 'dark' ? '☀' : '☾'}
+          </button>
         </div>
       </header>
 
       <main className="layout">
-        <section className="panel">
-          <h2>Controls</h2>
-          <label>
-            Base station
+        <aside className="panel">
+          <h2>Configuration</h2>
+
+          <div className="control-group">
+            <label>Start Station</label>
             <select value={baseStation} onChange={(e) => setBaseStation(e.target.value)}>
               {stations.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
+                <option key={s.id} value={s.id}>{s.name}</option>
               ))}
             </select>
-          </label>
-          <label>
-            Daily budget (minutes)
+          </div>
+
+          <div className="control-group">
+            <label>Daily Budget (min)</label>
             <input
               type="number"
               value={dailyBudget}
               min={60}
-              step={10}
+              step={30}
               onChange={(e) => setDailyBudget(Number(e.target.value))}
             />
-          </label>
-          <div className="grid">
-            <label>
-              Inspect single-line (min)
-              <input
-                type="number"
-                value={singleLineMinutes}
-                min={1}
-                step={1}
-                onChange={(e) => setSingleLineMinutes(Number(e.target.value))}
-              />
-            </label>
-            <label>
-              Inspect 2-line (min)
-              <input
-                type="number"
-                value={twoLineMinutes}
-                min={1}
-                step={1}
-                onChange={(e) => setTwoLineMinutes(Number(e.target.value))}
-              />
-            </label>
-            <label>
-              Inspect 3+ line (min)
-              <input
-                type="number"
-                value={threePlusMinutes}
-                min={1}
-                step={1}
-                onChange={(e) => setThreePlusMinutes(Number(e.target.value))}
-              />
-            </label>
-            <label>
-              Transfer 2-line (min)
-              <input
-                type="number"
-                value={twoLineXfer}
-                min={0}
-                step={1}
-                onChange={(e) => setTwoLineXfer(Number(e.target.value))}
-              />
-            </label>
-            <label>
-              Transfer 3+ (min)
-              <input
-                type="number"
-                value={threePlusXfer}
-                min={0}
-                step={1}
-                onChange={(e) => setThreePlusXfer(Number(e.target.value))}
-              />
-            </label>
           </div>
-          <label>
-            Inspection overrides (JSON)
-            <textarea value={inspectionOverrides} onChange={(e) => setInspectionOverrides(e.target.value)} />
-          </label>
-          <label>
-            Transfer overrides (JSON)
-            <textarea value={transferOverrides} onChange={(e) => setTransferOverrides(e.target.value)} />
-          </label>
-          <label>
-            Animation speed (x)
+
+          <div className="control-group">
+            <label>Animation Speed</label>
             <input
               type="range"
+              className="range-slider"
               min={10}
-              max={120}
+              max={200}
               value={speed}
               onChange={(e) => setSpeed(Number(e.target.value))}
             />
-          </label>
+          </div>
+
           <div className="actions">
-            <button onClick={handlePlan} disabled={loading || !baseStation}>
-              {loading ? "Planning..." : "Generate Plan"}
+            <button className="primary" onClick={handlePlan} disabled={loading || !baseStation}>
+              {loading ? "Calculating Route..." : "GENERATE PLAN"}
             </button>
-            <button onClick={handleExportJson} disabled={!plan}>
+            <button className="secondary" onClick={() => {
+              if (plan) downloadFile("plan.json", JSON.stringify(plan, null, 2), "application/json");
+            }} disabled={!plan}>
               Export JSON
             </button>
-            <button onClick={handleExportCsv} disabled={!plan}>
-              Export CSV
-            </button>
           </div>
-          {error && <div className="error">{error}</div>}
-        </section>
 
-        <section className="map">
-          <canvas ref={canvasRef} width={900} height={650} />
+          {error && <div className="error" style={{ marginTop: 10 }}>{error}</div>}
+        </aside>
+
+        <section className="map-container">
+          <canvas
+            ref={canvasRef}
+            onMouseMove={handleMouseMove}
+            style={{ width: '100%', height: '100%', cursor: hoveredStation ? 'pointer' : 'default' }}
+          />
+
           <div className="day-selector">
-            <span>Day</span>
+            <span style={{ opacity: 0.6 }}>Day View</span>
             <select
               value={selectedDay}
               onChange={(e) => setSelectedDay(Number(e.target.value))}
               disabled={!plan}
             >
               {plan?.days.map((d, idx) => (
-                <option key={d.day_index} value={idx}>
-                  Day {d.day_index}
-                </option>
+                <option key={d.day_index} value={idx}>Day {d.day_index}</option>
               ))}
+              {!plan && <option>--</option>}
             </select>
-            {day && (
-              <div className="day-stats">
-                <span>{day.total_minutes.toFixed(1)} min</span>
-                <span>{day.transfer_count} transfers</span>
-                <span>{day.stations.length} stations</span>
-              </div>
-            )}
           </div>
         </section>
       </main>
