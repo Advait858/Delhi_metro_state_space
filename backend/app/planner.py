@@ -178,7 +178,6 @@ def local_search(
     closure: Dict[Tuple[str, str], float],
     inspection: Dict[str, float],
     daily_budget: float,
-    daily_budget: float,
     max_iter: int = 20,
 ) -> List[Route]:
     def total_time(routes_list: List[Route]) -> float:
