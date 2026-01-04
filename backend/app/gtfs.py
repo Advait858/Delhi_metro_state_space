@@ -122,11 +122,42 @@ def load_gtfs(gtfs_path: str) -> GTFSData:
             lines=[],
         )
 
+    # Hardcoded color map for Delhi Metro
+    # Official or approximate hex codes
+    COLOR_MAP = {
+        "RED": "FF0000",
+        "YELLOW": "FFE100",
+        "BLUE": "0055A4",
+        "GREEN": "008000",
+        "VIOLET": "4B0082",
+        "MAGENTA": "FF00FF",
+        "PINK": "FF69B4",
+        "ORANGE": "FFA500",
+        "AIRPORT": "FFA500",
+        "AQUA": "00FFFF",
+        "GRAY": "808080",
+        "RAPID": "191970",  # Midnight Blue for Rapid
+    }
+
     routes_by_id: Dict[str, Tuple[str, Optional[str]]] = {}
     for row in routes:
         route_id = row.get("route_id", "")
+        long_name = row.get("route_long_name", "").upper()
+        short_name = row.get("route_short_name", "").upper()
         name = row.get("route_short_name") or row.get("route_long_name") or route_id
-        color = row.get("route_color") or None
+        
+        # Try to find color in long_name (e.g., "RED_...")
+        color = row.get("route_color")
+        if not color:
+            for key, hex_code in COLOR_MAP.items():
+                if key in long_name or key in short_name:
+                    color = hex_code
+                    break
+        
+        # Fallback default if still no color
+        if not color:
+            color = "000000"
+
         routes_by_id[route_id] = (name, color)
 
     trip_to_route: Dict[str, str] = {}
