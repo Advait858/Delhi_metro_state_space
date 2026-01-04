@@ -1,0 +1,8 @@
+{
+  "two_line_minutes": 4,
+  "three_plus_minutes": 6,
+  "overrides": {
+    "STATION_ID_HUB_EXAMPLE": 10,
+    "STATION_ID_LARGE_EXAMPLE": 12
+  }
+}
