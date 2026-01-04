@@ -42,7 +42,7 @@ function latLonToXY(
   bounds: Bounds,
   width: number,
   height: number,
-  padding = 40
+  padding = 20
 ) {
   const latSpan = bounds.maxLat - bounds.minLat || 1;
   const lonSpan = bounds.maxLon - bounds.minLon || 1;
@@ -81,12 +81,65 @@ function flattenRoutePoints(day: DayPlan | null): number[][] {
   return points;
 }
 
-function buildTimedSegments(day: DayPlan | null): { points: number[][]; durationMs: number }[] {
+function buildTimedSegments(day: DayPlan | null, lines: Line[]): { points: number[][]; durationMs: number; lineColor: string }[] {
   if (!day) return [];
+  const lineMap = new Map(lines.map(line => [line.id, line]));
   return day.segments.map((seg) => ({
     points: seg.coords,
-    durationMs: seg.minutes * 1000
+    durationMs: seg.minutes * 1000,
+    lineColor: lineMap.get(seg.line_id)?.color ? `#${lineMap.get(seg.line_id)!.color!.replace("#", "")}` : "#9bd2c9"
   }));
+}
+
+function drawTrain(ctx: CanvasRenderingContext2D, x: number, y: number, angle: number, color: string) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(angle);
+
+  // Train Scaling
+  const w = 24;
+  const h = 10;
+
+  // Shadow
+  ctx.fillStyle = "rgba(0,0,0,0.3)";
+  ctx.beginPath();
+  ctx.roundRect(-w / 2 + 2, -h / 2 + 2, w, h, 3);
+  ctx.fill();
+
+  // Body
+  ctx.fillStyle = "#fff"; // Train body usually white/silver
+  ctx.beginPath();
+  ctx.roundRect(-w / 2, -h / 2, w, h, 3);
+  ctx.fill();
+
+  // Stripe (Line Color)
+  ctx.fillStyle = color;
+  ctx.fillRect(-w / 2, -h / 2 + 3, w, 4);
+
+  // Front Window (Windshield)
+  ctx.fillStyle = "#1a1a1a";
+  ctx.beginPath();
+  ctx.moveTo(w / 2, -h / 2 + 1);
+  ctx.lineTo(w / 2 - 4, -h / 2 + 1);
+  ctx.lineTo(w / 2 - 4, h / 2 - 1);
+  ctx.lineTo(w / 2, h / 2 - 1);
+  ctx.fill();
+
+  // Headlights
+  ctx.fillStyle = "#ffcc00"; // yellow lights
+  ctx.beginPath();
+  ctx.arc(w / 2 - 1, -h / 2 + 2, 1, 0, Math.PI * 2);
+  ctx.arc(w / 2 - 1, h / 2 - 2, 1, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Red Tail lights (back)
+  ctx.fillStyle = "#ff0000";
+  ctx.beginPath();
+  ctx.arc(-w / 2 + 1, -h / 2 + 2, 1, 0, Math.PI * 2);
+  ctx.arc(-w / 2 + 1, h / 2 - 2, 1, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.restore();
 }
 
 function downloadFile(filename: string, content: string, type: string) {
@@ -133,7 +186,7 @@ export default function App() {
   const bounds = useMemo(() => computeBounds(stations, lines), [stations, lines]);
   const day = plan?.days[selectedDay] ?? null;
   const routePoints = useMemo(() => flattenRoutePoints(day), [day]);
-  const timedSegments = useMemo(() => buildTimedSegments(day), [day]);
+  const timedSegments = useMemo(() => buildTimedSegments(day, lines), [day, lines]);
 
   // Canvas Mouse Handling for Hover
   const handleMouseMove = (e: React.MouseEvent) => {
@@ -254,6 +307,8 @@ export default function App() {
         const scaled = elapsed * speed;
         let remaining = scaled;
         let currentPoint: number[] | null = null;
+        let angle = 0;
+
         for (const seg of timedSegments) {
           const segmentDuration = Math.max(seg.durationMs, 1);
           if (remaining <= segmentDuration) {
@@ -269,27 +324,19 @@ export default function App() {
               const p1 = points[low];
               const p2 = points[high];
               currentPoint = [p1[0] + (p2[0] - p1[0]) * t, p1[1] + (p2[1] - p1[1]) * t];
+
+              const { x: x1, y: y1 } = latLonToXY(p1[0], p1[1], bounds, width, height);
+              const { x: x2, y: y2 } = latLonToXY(p2[0], p2[1], bounds, width, height);
+              angle = Math.atan2(y2 - y1, x2 - x1);
             }
             break;
           }
           remaining -= segmentDuration;
         }
+
         if (currentPoint) {
           const { x, y } = latLonToXY(currentPoint[0], currentPoint[1], bounds, width, height);
-          ctx.beginPath();
-          ctx.arc(x, y, 8, 0, Math.PI * 2);
-          ctx.fillStyle = "#fff";
-          ctx.fill();
-          ctx.lineWidth = 2;
-          ctx.strokeStyle = "#000";
-          ctx.stroke();
-
-          // Ripple effect
-          const ripple = (timeMs / 500) % 1;
-          ctx.beginPath();
-          ctx.arc(x, y, 8 + ripple * 20, 0, Math.PI * 2);
-          ctx.strokeStyle = `rgba(255, 255, 255, ${1 - ripple})`;
-          ctx.stroke();
+          drawTrain(ctx, x, y, angle, routeColor);
         }
       }
     };
